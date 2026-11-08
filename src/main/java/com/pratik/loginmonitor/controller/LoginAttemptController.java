@@ -19,6 +19,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import com.pratik.loginmonitor.dto.LoginRequest;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
+import com.pratik.loginmonitor.service.CaptchaService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
@@ -31,21 +32,36 @@ public class LoginAttemptController {
 
     private final LoginService loginService;
     private final LoginRateLimiter loginRateLimiter;
+    private final CaptchaService captchaService;
+    private final ClientIpAddressExtractor clientIpAddressExtractor;
 
-    public LoginAttemptController(LoginService loginService, LoginRateLimiter loginRateLimiter) {
+    public LoginAttemptController(LoginService loginService, LoginRateLimiter loginRateLimiter,
+                                  CaptchaService captchaService,
+                                  ClientIpAddressExtractor clientIpAddressExtractor) {
         this.loginService = loginService;
         this.loginRateLimiter = loginRateLimiter;
+        this.captchaService = captchaService;
+        this.clientIpAddressExtractor = clientIpAddressExtractor;
     }
 
     @PostMapping
-    public ResponseEntity<LoginAttempt> recordLoginAttempt(
+    public ResponseEntity<?> recordLoginAttempt(
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest) {
 
-        String clientIp = extractClientIpAddress(httpRequest);
+        String clientIp = clientIpAddressExtractor.extract(httpRequest);
 
         if (!loginRateLimiter.isAllowed(clientIp)) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
+
+        if (captchaService.isCaptchaRequired(clientIp)) {
+            if (!captchaService.consumePermission(clientIp)) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("captchaRequired", true);
+                error.put("message", "CAPTCHA verification is required before another login attempt");
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error);
+            }
         }
 
         LoginAttempt savedAttempt = loginService.recordLoginAttempt(
@@ -53,6 +69,15 @@ public class LoginAttemptController {
                 clientIp,
                 request.getStatus()
         );
+
+        if (request.getStatus() == LoginStatus.FAILURE
+                && captchaService.isCaptchaRequired(clientIp)) {
+            Map<String, Object> response = new HashMap<>();
+            response.put("captchaRequired", true);
+            response.put("message", "CAPTCHA verification is now required after 5 failed login attempts");
+            response.put("loginAttempt", savedAttempt);
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(response);
+        }
 
         return ResponseEntity.status(HttpStatus.CREATED).body(savedAttempt);
     }
@@ -80,21 +105,4 @@ public class LoginAttemptController {
         return ResponseEntity.badRequest().body(error);
     }
 
-    /**
-     * Extracts the client's actual IP address from the HTTP request headers
-     * in case the request is routed through a proxy or load balancer.
-     */
-    private String extractClientIpAddress(HttpServletRequest request) {
-        String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isBlank() && !"unknown".equalsIgnoreCase(xForwardedFor)) {
-            return xForwardedFor.split(",")[0].trim();
-        }
-
-        String xRealIp = request.getHeader("X-Real-IP");
-        if (xRealIp != null && !xRealIp.isBlank() && !"unknown".equalsIgnoreCase(xRealIp)) {
-            return xRealIp.trim();
-        }
-
-        return request.getRemoteAddr();
-    }
 }
