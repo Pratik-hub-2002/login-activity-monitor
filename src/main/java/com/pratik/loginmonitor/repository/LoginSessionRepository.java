@@ -1,3 +1,4 @@
+
 package com.pratik.loginmonitor.repository;
 
 import java.time.LocalDateTime;
@@ -19,4 +20,7 @@ public interface LoginSessionRepository extends JpaRepository<LoginSession, Long
     List<LoginSession> findByUsernameAndActiveTrue(String username);
 
     List<LoginSession> findByActiveTrueAndExpiresAtBefore(LocalDateTime expiresAt);
+
+    List<LoginSession> findByActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+            LocalDateTime currentTime);
 }
