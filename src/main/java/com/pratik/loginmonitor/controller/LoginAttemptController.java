@@ -19,6 +19,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import com.pratik.loginmonitor.dto.LoginRequest;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
+import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -29,9 +30,11 @@ import jakarta.validation.Valid;
 public class LoginAttemptController {
 
     private final LoginService loginService;
+    private final LoginRateLimiter loginRateLimiter;
 
-    public LoginAttemptController(LoginService loginService) {
+    public LoginAttemptController(LoginService loginService, LoginRateLimiter loginRateLimiter) {
         this.loginService = loginService;
+        this.loginRateLimiter = loginRateLimiter;
     }
 
     @PostMapping
@@ -40,6 +43,10 @@ public class LoginAttemptController {
             HttpServletRequest httpRequest) {
 
         String clientIp = extractClientIpAddress(httpRequest);
+
+        if (!loginRateLimiter.isAllowed(clientIp)) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).build();
+        }
 
         LoginAttempt savedAttempt = loginService.recordLoginAttempt(
                 request.getUsername(),
