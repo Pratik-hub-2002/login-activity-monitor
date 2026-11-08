@@ -14,16 +14,17 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-import com.pratik.loginmonitor.dto.LoginRequest;
+import com.pratik.loginmonitor.dto.PublicLoginFailureRequest;
 import com.pratik.loginmonitor.entity.LoginAttempt;
-import com.pratik.loginmonitor.entity.LoginSession;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
-import com.pratik.loginmonitor.service.SessionService;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -51,9 +52,6 @@ class LoginAttemptControllerTest {
     @Mock
     private ClientIpAddressExtractor clientIpAddressExtractor;
 
-    @Mock
-    private SessionService sessionService;
-
     @InjectMocks
     private LoginAttemptController loginAttemptController;
 
@@ -74,14 +72,17 @@ class LoginAttemptControllerTest {
                 "john", "192.168.1.1", LoginStatus.SUCCESS
         )).thenReturn(List.of(a1));
 
-        ResponseEntity<List<LoginAttempt>> response =
+        Authentication authentication = new TestingAuthenticationToken(
+                "john", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+
+        ResponseEntity<?> response =
                 loginAttemptController.getLoginAttempts(
-                        "john", "192.168.1.1", LoginStatus.SUCCESS
+                        "john", "192.168.1.1", LoginStatus.SUCCESS, authentication
                 );
 
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
-        assertEquals(1, response.getBody().size());
+        assertEquals(1, ((List<?>) response.getBody()).size());
 
         verify(loginService).getLoginAttempts(
                 "john", "192.168.1.1", LoginStatus.SUCCESS
@@ -90,9 +91,44 @@ class LoginAttemptControllerTest {
         verifyNoInteractions(
                 loginRateLimiter,
                 captchaService,
-                clientIpAddressExtractor,
-                sessionService
+                clientIpAddressExtractor
         );
+    }
+
+    @Test
+    @DisplayName("USER should be able to retrieve only their own login history")
+    void testGetLoginAttempts_userOwnHistory() {
+        Authentication authentication = new TestingAuthenticationToken(
+                "alice", null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+        LoginAttempt attempt = new LoginAttempt(
+                1L, "alice", "192.168.1.10",
+                LocalDateTime.now(), LoginStatus.SUCCESS);
+        when(loginService.getLoginAttempts(
+                "alice", null, null)).thenReturn(List.of(attempt));
+
+        ResponseEntity<?> response =
+                loginAttemptController.getLoginAttempts(
+                        null, null, null, authentication);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        verify(loginService).getLoginAttempts("alice", null, null);
+    }
+
+    @Test
+    @DisplayName("USER should not retrieve another user's login history")
+    void testGetLoginAttempts_userCannotViewAnotherUser() {
+        Authentication authentication = new TestingAuthenticationToken(
+                "alice", null, List.of(new SimpleGrantedAuthority("ROLE_USER")));
+
+        ResponseEntity<?> response =
+                loginAttemptController.getLoginAttempts(
+                        "bob", null, null, authentication);
+
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        verify(loginService, never()).getLoginAttempts(
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any());
     }
 
     // 2. Rate limiter blocks request
@@ -111,7 +147,7 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user1", LoginStatus.SUCCESS),
+                        new PublicLoginFailureRequest("user1"),
                         httpRequest
                 );
 
@@ -123,16 +159,16 @@ class LoginAttemptControllerTest {
         verify(loginRateLimiter).isAllowed("10.0.0.1");
 
         verify(loginService, never()).recordLoginAttempt(
-                "user1", "10.0.0.1", LoginStatus.SUCCESS
+                anyString(), anyString(), any(LoginStatus.class)
         );
 
-        verifyNoInteractions(loginService, captchaService, sessionService);
+        verifyNoInteractions(loginService, captchaService);
     }
 
     // 3. Successful login creates a session
     @Test
-    @DisplayName("Should create a session after successful login")
-    void testPostLoginAttempt_allowedReturnsCreated() {
+    @DisplayName("Should record a public failure without treating it as an authenticated success")
+    void testPostLoginAttempt_publicFailureReturnsCreated() {
 
         HttpServletRequest httpRequest =
                 org.mockito.Mockito.mock(HttpServletRequest.class);
@@ -151,59 +187,61 @@ class LoginAttemptControllerTest {
                 "user2",
                 "10.0.0.2",
                 LocalDateTime.now(),
-                LoginStatus.SUCCESS
+                LoginStatus.FAILURE
         );
 
         when(loginService.recordLoginAttempt(
-                "user2", "10.0.0.2", LoginStatus.SUCCESS
+                "user2", "10.0.0.2", LoginStatus.FAILURE
         )).thenReturn(savedAttempt);
-
-        LoginSession session = new LoginSession();
-        session.setSessionId("test-session-id");
-        session.setUsername("user2");
-        session.setIpAddress("10.0.0.2");
-        session.setCreatedAt(LocalDateTime.now());
-        session.setExpiresAt(LocalDateTime.now().plusMinutes(30));
-        session.setActive(true);
-
-        when(sessionService.createSession(anyString(), anyString()))
-                .thenReturn(session);
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user2", LoginStatus.SUCCESS),
+                        new PublicLoginFailureRequest("user2"),
                         httpRequest
                 );
 
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
-
-        Map<String, Object> responseBody =
-                (Map<String, Object>) response.getBody();
-
-        assertNotNull(responseBody);
-
-        assertEquals(
-                savedAttempt,
-                responseBody.get("loginAttempt")
-        );
-
-        Map<String, Object> sessionBody =
-                (Map<String, Object>) responseBody.get("session");
-
-        assertNotNull(sessionBody);
-
-        assertEquals(
-                "test-session-id",
-                sessionBody.get("sessionId")
-        );
+        assertEquals(savedAttempt, response.getBody());
 
         verify(loginService).recordLoginAttempt(
-                "user2", "10.0.0.2", LoginStatus.SUCCESS
+                "user2", "10.0.0.2", LoginStatus.FAILURE
         );
+    }
 
-        verify(sessionService).createSession(
-                "user2", "10.0.0.2"
+    @Test
+    @DisplayName("Should never create a public SUCCESS record or authenticated session")
+    void testPostLoginAttempt_failureOnlyPayloadNeverUsesSuccessStatus() {
+        HttpServletRequest httpRequest =
+                org.mockito.Mockito.mock(HttpServletRequest.class);
+
+        when(clientIpAddressExtractor.extract(httpRequest))
+                .thenReturn("10.0.0.2");
+        when(loginRateLimiter.isAllowed("10.0.0.2"))
+                .thenReturn(true);
+        when(captchaService.isCaptchaRequired("10.0.0.2"))
+                .thenReturn(false);
+
+        LoginAttempt savedFailure = new LoginAttempt(
+                2L,
+                "user2",
+                "10.0.0.2",
+                LocalDateTime.now(),
+                LoginStatus.FAILURE
         );
+        when(loginService.recordLoginAttempt(
+                "user2", "10.0.0.2", LoginStatus.FAILURE))
+                .thenReturn(savedFailure);
+
+        ResponseEntity<?> response =
+                loginAttemptController.recordLoginAttempt(
+                        new PublicLoginFailureRequest("user2"),
+                        httpRequest);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(loginService, org.mockito.Mockito.never()).recordLoginAttempt(
+                "user2", "10.0.0.2", LoginStatus.SUCCESS);
+        verify(loginService, org.mockito.Mockito.times(1)).recordLoginAttempt(
+                "user2", "10.0.0.2", LoginStatus.FAILURE);
     }
 
     // 4. Fifth failure requires CAPTCHA
@@ -237,7 +275,7 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user3", LoginStatus.FAILURE),
+                        new PublicLoginFailureRequest("user3"),
                         httpRequest
                 );
 
@@ -252,9 +290,6 @@ class LoginAttemptControllerTest {
                 "user3", "10.0.0.3", LoginStatus.FAILURE
         );
 
-        verify(sessionService, never()).createSession(
-                anyString(), anyString()
-        );
     }
 
     // 5. Block attempt when CAPTCHA permission is missing
@@ -279,7 +314,7 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user4", LoginStatus.FAILURE),
+                        new PublicLoginFailureRequest("user4"),
                         httpRequest
                 );
 
@@ -291,12 +326,11 @@ class LoginAttemptControllerTest {
                 any(LoginStatus.class)
         );
 
-        verifyNoInteractions(sessionService);
     }
 
     // 6. Successful CAPTCHA permission allows one login attempt
     @Test
-    @DisplayName("Should consume CAPTCHA permission exactly once")
+    @DisplayName("Should consume CAPTCHA permission exactly once for failure monitoring")
     void testPostLoginAttempt_verificationPermissionPermitsOneAttempt() {
 
         HttpServletRequest httpRequest =
@@ -309,7 +343,7 @@ class LoginAttemptControllerTest {
                 .thenReturn(true);
 
         when(captchaService.isCaptchaRequired("10.0.0.5"))
-                .thenReturn(true);
+                .thenReturn(true, false, true);
 
         when(captchaService.consumePermission("10.0.0.5"))
                 .thenReturn(true, false);
@@ -319,33 +353,22 @@ class LoginAttemptControllerTest {
                 "user5",
                 "10.0.0.5",
                 LocalDateTime.now(),
-                LoginStatus.SUCCESS
+                LoginStatus.FAILURE
         );
 
         when(loginService.recordLoginAttempt(
-                "user5", "10.0.0.5", LoginStatus.SUCCESS
+                "user5", "10.0.0.5", LoginStatus.FAILURE
         )).thenReturn(savedAttempt);
-
-        LoginSession session = new LoginSession();
-        session.setSessionId("test-session-id");
-        session.setUsername("user5");
-        session.setIpAddress("10.0.0.5");
-        session.setCreatedAt(LocalDateTime.now());
-        session.setExpiresAt(LocalDateTime.now().plusMinutes(30));
-        session.setActive(true);
-
-        when(sessionService.createSession(anyString(), anyString()))
-                .thenReturn(session);
 
         ResponseEntity<?> firstResponse =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user5", LoginStatus.SUCCESS),
+                        new PublicLoginFailureRequest("user5"),
                         httpRequest
                 );
 
         ResponseEntity<?> secondResponse =
                 loginAttemptController.recordLoginAttempt(
-                        new LoginRequest("user5", LoginStatus.SUCCESS),
+                        new PublicLoginFailureRequest("user5"),
                         httpRequest
                 );
 
@@ -364,11 +387,9 @@ class LoginAttemptControllerTest {
 
         verify(loginService, org.mockito.Mockito.times(1))
                 .recordLoginAttempt(
-                        "user5", "10.0.0.5", LoginStatus.SUCCESS
+                        "user5", "10.0.0.5", LoginStatus.FAILURE
                 );
 
-        verify(sessionService, org.mockito.Mockito.times(1))
-                .createSession("user5", "10.0.0.5");
     }
 
     // 7. Invalid status query parameter
