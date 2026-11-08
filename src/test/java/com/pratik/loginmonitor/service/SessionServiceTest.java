@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -211,6 +212,74 @@ class SessionServiceTest {
         assertTrue(sessionService.refreshSession("expired-session").isEmpty());
         assertFalse(session.isActive());
         verify(loginSessionRepository).save(session);
+    }
+
+    @Test
+    @DisplayName("Should not refresh or save a session when client IP does not match")
+    void refreshRejectsInvalidClientIpBeforeUpdate() {
+        LoginSession session = activeSession();
+        when(loginSessionRepository.findBySessionId("session-1"))
+                .thenReturn(Optional.of(session));
+
+        Optional<LoginSession> result = sessionService.refreshSession(
+                "session-1", "203.0.113.50", "alice");
+
+        assertTrue(result.isEmpty());
+        verify(loginSessionRepository, never()).save(any(LoginSession.class));
+        assertEquals(LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC),
+                session.getLastActivityAt());
+    }
+
+    @Test
+    @DisplayName("Should not refresh or save a session for a different username")
+    void refreshRejectsDifferentUsernameBeforeUpdate() {
+        LoginSession session = activeSession();
+        when(loginSessionRepository.findBySessionId("session-1"))
+                .thenReturn(Optional.of(session));
+
+        Optional<LoginSession> result = sessionService.refreshSession(
+                "session-1", "192.168.1.10", "bob");
+
+        assertTrue(result.isEmpty());
+        verify(loginSessionRepository, never()).save(any(LoginSession.class));
+        assertEquals(LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC),
+                session.getLastActivityAt());
+    }
+
+    @Test
+    @DisplayName("Should retrieve only unexpired active sessions")
+    void getActiveSessionsExcludesExpiredSessions() {
+        LoginSession active = activeSession();
+        active.setExpiresAt(LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC).plusMinutes(5));
+        when(loginSessionRepository.findByActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+                LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC)))
+                .thenReturn(List.of(active));
+
+        List<LoginSession> sessions = sessionService.getActiveSessions();
+
+        assertEquals(List.of(active), sessions);
+        verify(loginSessionRepository)
+                .findByActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+                        LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC));
+    }
+
+    @Test
+    @DisplayName("Should retrieve only active unexpired sessions for a username")
+    void getActiveSessionsByUsername() {
+        LoginSession active = activeSession();
+        LocalDateTime now = LocalDateTime.ofInstant(FIXED_INSTANT, ZoneOffset.UTC);
+        when(loginSessionRepository
+                .findByUsernameAndActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+                        "alice", now))
+                .thenReturn(List.of(active));
+
+        List<LoginSession> sessions =
+                sessionService.getActiveSessionsByUsername("alice");
+
+        assertEquals(List.of(active), sessions);
+        verify(loginSessionRepository)
+                .findByUsernameAndActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+                        "alice", now);
     }
 
     private LoginSession activeSession() {

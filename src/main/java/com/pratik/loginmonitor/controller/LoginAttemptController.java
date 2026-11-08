@@ -6,9 +6,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.hibernate.validator.constraints.Mod10Check;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,14 +18,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
-import com.pratik.loginmonitor.dto.LoginRequest;
+import com.pratik.loginmonitor.dto.PublicLoginFailureRequest;
 import com.pratik.loginmonitor.entity.LoginAttempt;
-import com.pratik.loginmonitor.entity.LoginSession;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
-import com.pratik.loginmonitor.service.SessionService;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -38,26 +36,22 @@ public class LoginAttemptController {
     private final LoginRateLimiter loginRateLimiter;
     private final CaptchaService captchaService;
     private final ClientIpAddressExtractor clientIpAddressExtractor;
-    private final SessionService sessionService;
-    
 
     public LoginAttemptController(
             LoginService loginService,
             LoginRateLimiter loginRateLimiter,
             CaptchaService captchaService,
-            ClientIpAddressExtractor clientIpAddressExtractor,
-            SessionService sessionService) {
+            ClientIpAddressExtractor clientIpAddressExtractor) {
 
         this.loginService = loginService;
         this.loginRateLimiter = loginRateLimiter;
         this.captchaService = captchaService;
         this.clientIpAddressExtractor = clientIpAddressExtractor;
-        this.sessionService = sessionService;
     }
 
     @PostMapping
     public ResponseEntity<?> recordLoginAttempt(
-            @Valid @RequestBody LoginRequest request,
+            @Valid @RequestBody PublicLoginFailureRequest request,
             HttpServletRequest httpRequest) {
 
         // 1. Extract client IP address
@@ -91,7 +85,7 @@ public class LoginAttemptController {
         LoginAttempt savedAttempt = loginService.recordLoginAttempt(
                 request.getUsername(),
                 clientIp,
-                request.getStatus()
+                LoginStatus.FAILURE
         );
 
         // 5. Check CAPTCHA requirement after failed login
@@ -110,33 +104,7 @@ public class LoginAttemptController {
                     .body(response);
         }
 
-        // 6. Create session only after SUCCESS
-        if (savedAttempt.getStatus() == LoginStatus.SUCCESS) {
-
-            LoginSession session = sessionService.createSession(
-                    savedAttempt.getUsername(),
-                    clientIp
-            );
-
-            // Prepare session information
-            Map<String, Object> sessionResponse = new HashMap<>();
-
-            sessionResponse.put("sessionId", session.getSessionId());
-            sessionResponse.put("createdAt", session.getCreatedAt());
-            sessionResponse.put("expiresAt", session.getExpiresAt());
-
-            // Prepare final response
-            Map<String, Object> response = new HashMap<>();
-
-            response.put("loginAttempt", savedAttempt);
-            response.put("session", sessionResponse);
-
-            return ResponseEntity
-                    .status(HttpStatus.CREATED)
-                    .body(response);
-        }
-
-        // 7. Return normal response for FAILURE
+        // 6. Return the normal failure-monitoring response
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(savedAttempt);
@@ -144,10 +112,23 @@ public class LoginAttemptController {
 
     // GET login attempts with optional filters
     @GetMapping
-    public ResponseEntity<List<LoginAttempt>> getLoginAttempts(
+    public ResponseEntity<?> getLoginAttempts(
             @RequestParam(required = false) String username,
             @RequestParam(required = false) String ipAddress,
-            @RequestParam(required = false) LoginStatus status) {
+            @RequestParam(required = false) LoginStatus status,
+            Authentication authentication) {
+
+        if (authentication == null || !authentication.isAuthenticated()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        boolean admin = hasAnyRole(authentication, "ROLE_ADMIN", "ROLE_SUPERADMIN");
+        if (!admin) {
+            if (username != null && !authentication.getName().equals(username)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            }
+            username = authentication.getName();
+        }
 
         List<LoginAttempt> attempts = loginService.getLoginAttempts(
                 username,
@@ -156,6 +137,20 @@ public class LoginAttemptController {
         );
 
         return ResponseEntity.ok(attempts);
+    }
+
+    private boolean hasAnyRole(Authentication authentication, String... roles) {
+        if (authentication == null || authentication.getAuthorities() == null) {
+            return false;
+        }
+        for (var authority : authentication.getAuthorities()) {
+            for (String role : roles) {
+                if (role.equals(authority.getAuthority())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // Handle invalid query parameter values

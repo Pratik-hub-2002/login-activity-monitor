@@ -23,4 +23,8 @@ public interface LoginSessionRepository extends JpaRepository<LoginSession, Long
 
     List<LoginSession> findByActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
             LocalDateTime currentTime);
+
+    List<LoginSession> findByUsernameAndActiveTrueAndExpiresAtAfterOrderByCreatedAtDesc(
+            String username,
+            LocalDateTime currentTime);
 }
