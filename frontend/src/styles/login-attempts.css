@@ -1,0 +1,149 @@
+.attempts-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.attempts-filters label {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #334e68;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.attempts-filters input,
+.attempts-filters select {
+  width: 100%;
+  height: 42px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  outline: 0;
+  background: #fff;
+  color: #102a43;
+  padding: 0 11px;
+}
+
+.attempts-filters input:focus,
+.attempts-filters select:focus {
+  border-color: #486581;
+  box-shadow: 0 0 0 3px rgba(72, 101, 129, 0.12);
+}
+
+.summary-card,
+.attempts-card {
+  border: 1px solid #e6edf5;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  padding: 20px;
+}
+
+.summary-card {
+  margin-bottom: 16px;
+}
+
+.summary-card h2,
+.attempts-card h2 {
+  margin: 0 0 16px;
+  color: #102a43;
+  font-size: 18px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.attempts-table,
+.summary-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.attempts-table th,
+.attempts-table td,
+.summary-table th,
+.summary-table td {
+  border-bottom: 1px solid #edf2f7;
+  padding: 12px 10px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.attempts-table th,
+.summary-table th {
+  color: #627d98;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.attempts-table td,
+.summary-table td {
+  color: #334e68;
+  font-size: 14px;
+}
+
+.attempts-table tbody tr:last-child td,
+.summary-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-badge.success {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.status-badge.failure {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.count-success,
+.count-failure {
+  font-weight: 800;
+}
+
+.count-success {
+  color: #15803d;
+}
+
+.count-failure {
+  color: #b91c1c;
+}
+
+.attempts-empty {
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #627d98;
+  padding: 18px;
+  text-align: center;
+}
+
+.attempts-empty.compact {
+  padding: 12px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+@media (max-width: 760px) {
+  .attempts-filters {
+    grid-template-columns: 1fr;
+  }
+}

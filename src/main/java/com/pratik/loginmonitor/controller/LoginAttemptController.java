@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.pratik.loginmonitor.dto.PublicLoginFailureRequest;
+import com.pratik.loginmonitor.dto.LoginAttemptResponse;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
@@ -29,7 +30,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 
 @RestController
-@RequestMapping("/api/login-attempts")
+@RequestMapping
 public class LoginAttemptController {
 
     private final LoginService loginService;
@@ -49,13 +50,19 @@ public class LoginAttemptController {
         this.clientIpAddressExtractor = clientIpAddressExtractor;
     }
 
-    @PostMapping
+    @PostMapping({"/login", "/api/login", "/api/login-attempts"})
     public ResponseEntity<?> recordLoginAttempt(
             @Valid @RequestBody PublicLoginFailureRequest request,
             HttpServletRequest httpRequest) {
 
         // 1. Extract client IP address
         String clientIp = clientIpAddressExtractor.extract(httpRequest);
+
+        if (request.getStatus() != LoginStatus.FAILURE) {
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("message", "Public login recording only accepts FAILURE status"));
+        }
 
         // 2. Check rate limiting
         if (!loginRateLimiter.isAllowed(clientIp)) {
@@ -64,31 +71,15 @@ public class LoginAttemptController {
                     .build();
         }
 
-        // 3. Check CAPTCHA requirement
-        if (captchaService.isCaptchaRequired(clientIp)) {
-
-            if (!captchaService.consumePermission(clientIp)) {
-
-                Map<String, Object> error = new HashMap<>();
-
-                error.put("captchaRequired", true);
-                error.put("message",
-                        "CAPTCHA verification is required before another login attempt");
-
-                return ResponseEntity
-                        .status(HttpStatus.FORBIDDEN)
-                        .body(error);
-            }
-        }
-
-        // 4. Save login attempt
+        // 3. Save login attempt after the CAPTCHA filter has validated any required challenge.
         LoginAttempt savedAttempt = loginService.recordLoginAttempt(
                 request.getUsername(),
                 clientIp,
                 LoginStatus.FAILURE
         );
+        LoginAttemptResponse responseAttempt = toResponse(savedAttempt);
 
-        // 5. Check CAPTCHA requirement after failed login
+        // Check whether the next login submission will require CAPTCHA.
         if (savedAttempt.getStatus() == LoginStatus.FAILURE
                 && captchaService.isCaptchaRequired(clientIp)) {
 
@@ -97,7 +88,7 @@ public class LoginAttemptController {
             response.put("captchaRequired", true);
             response.put("message",
                     "CAPTCHA verification is now required after 5 failed login attempts");
-            response.put("loginAttempt", savedAttempt);
+            response.put("loginAttempt", responseAttempt);
 
             return ResponseEntity
                     .status(HttpStatus.FORBIDDEN)
@@ -107,16 +98,21 @@ public class LoginAttemptController {
         // 6. Return the normal failure-monitoring response
         return ResponseEntity
                 .status(HttpStatus.CREATED)
-                .body(savedAttempt);
+                .body(responseAttempt);
     }
 
     // GET login attempts with optional filters
-    @GetMapping
+    @GetMapping({"/login", "/api/login", "/api/login-attempts"})
     public ResponseEntity<?> getLoginAttempts(
             @RequestParam(required = false) String username,
-            @RequestParam(required = false) String ipAddress,
+            @RequestParam(name = "ip_address", required = false) String ipAddressSnake,
+            @RequestParam(name = "ipAddress", required = false) String ipAddressCamel,
             @RequestParam(required = false) LoginStatus status,
             Authentication authentication) {
+
+        String ipAddress = (ipAddressSnake != null && !ipAddressSnake.isBlank())
+                ? ipAddressSnake
+                : ipAddressCamel;
 
         if (authentication == null || !authentication.isAuthenticated()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -136,7 +132,27 @@ public class LoginAttemptController {
                 status
         );
 
-        return ResponseEntity.ok(attempts);
+        List<LoginAttemptResponse> responses =
+                attempts.stream().map(this::toResponse).toList();
+
+        return ResponseEntity.ok(responses);
+    }
+
+    public ResponseEntity<?> getLoginAttempts(
+            String username,
+            String ipAddress,
+            LoginStatus status,
+            Authentication authentication) {
+        return getLoginAttempts(username, ipAddress, null, status, authentication);
+    }
+
+    private LoginAttemptResponse toResponse(LoginAttempt attempt) {
+        return new LoginAttemptResponse(
+                attempt.getId(),
+                attempt.getUsername(),
+                attempt.getIpAddress(),
+                attempt.getAttemptTime(),
+                attempt.getStatus());
     }
 
     private boolean hasAnyRole(Authentication authentication, String... roles) {

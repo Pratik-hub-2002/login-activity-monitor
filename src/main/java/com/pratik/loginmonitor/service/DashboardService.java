@@ -35,5 +35,18 @@ public class DashboardService {
                 totalSuspicious
         );
     }
-}
 
+    public DashboardResponse getDashboardStatistics(String username, boolean administrator) {
+        if (administrator) {
+            return getDashboardStatistics();
+        }
+
+        return new DashboardResponse(
+                loginAttemptRepository.countByUsername(username),
+                loginAttemptRepository.countByUsernameAndStatus(
+                        username, LoginStatus.SUCCESS),
+                loginAttemptRepository.countByUsernameAndStatus(
+                        username, LoginStatus.FAILURE),
+                0);
+    }
+}
