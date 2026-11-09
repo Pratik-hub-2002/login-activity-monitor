@@ -202,6 +202,35 @@ class SecurityAuthorizationIntegrationTest {
         verifyNoInteractions(mailSender);
     }
 
+    @Test
+    @Transactional
+    void publicPostLoginAcceptsSuccessAndDoesNotCreateSession() throws Exception {
+        int initialSessions = sessionService.getActiveSessionsByUsername("alice").size();
+
+        mockMvc.perform(post("/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"alice\",\"ip_address\":\"127.0.0.1\",\"status\":\"SUCCESS\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value("alice"))
+                .andExpect(jsonPath("$.status").value("SUCCESS"));
+
+        org.junit.jupiter.api.Assertions.assertEquals(
+                initialSessions,
+                sessionService.getActiveSessionsByUsername("alice").size(),
+                "Public SUCCESS attempt must not create an authenticated session");
+    }
+
+    @Test
+    @Transactional
+    void publicPostLoginAcceptsFailure() throws Exception {
+        mockMvc.perform(post("/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"alice\",\"ip_address\":\"127.0.0.1\",\"status\":\"FAILURE\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.username").value("alice"))
+                .andExpect(jsonPath("$.status").value("FAILURE"));
+    }
+
     private User user(String username, UserRole role) {
         User user = new User();
         user.setUsername(username);

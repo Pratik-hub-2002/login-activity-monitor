@@ -28,6 +28,7 @@ import com.pratik.loginmonitor.dto.LoginAttemptResponse;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
+import com.pratik.loginmonitor.service.DetectionService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
@@ -81,6 +82,9 @@ class LoginAttemptControllerTest {
 
     @Mock
     private ClientIpAddressExtractor clientIpAddressExtractor;
+
+    @Mock
+    private DetectionService detectionService;
 
     @InjectMocks
     private LoginAttemptController loginAttemptController;
@@ -416,21 +420,6 @@ class LoginAttemptControllerTest {
     }
 
     @Test
-    @DisplayName("Public endpoint rejects a forged SUCCESS status")
-    void testPostLoginAttempt_rejectsForgedSuccess() {
-        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
-        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.0.0.4");
-
-        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(
-                new PublicLoginFailureRequest(
-                        "user4", "203.0.113.4", LoginStatus.SUCCESS),
-                httpRequest);
-
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        verifyNoInteractions(loginService, loginRateLimiter, captchaService);
-    }
-
-    @Test
     @DisplayName("Valid failure uses the server-derived IP, not the submitted IP")
     void testPostLoginAttempt_validFailureUsesServerIp() {
         HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
@@ -480,5 +469,83 @@ class LoginAttemptControllerTest {
         assertEquals(400, response.getBody().get("status"));
         assertEquals("Bad Request", response.getBody().get("error"));
         assertNotNull(response.getBody().get("message"));
+    }
+
+    // ── SUCCESS-status acceptance tests (PDF requirement) ───────────────────
+
+    @Test
+    @DisplayName("POST /login with status SUCCESS is accepted and returns HTTP 201")
+    void testPostLoginAttempt_successStatusIsAcceptedAndRecorded() {
+        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.1.2.3");
+        when(loginRateLimiter.isAllowed("10.1.2.3")).thenReturn(true);
+
+        LocalDateTime now = LocalDateTime.of(2026, 6, 1, 12, 0, 0);
+        LoginAttempt savedAttempt = new LoginAttempt(99L, "alice", "10.1.2.3", now, LoginStatus.SUCCESS);
+        when(loginService.recordLoginAttempt("alice", "10.1.2.3", LoginStatus.SUCCESS))
+                .thenReturn(savedAttempt);
+
+        PublicLoginFailureRequest request = new PublicLoginFailureRequest();
+        request.setUsername("alice");
+        request.setStatus(LoginStatus.SUCCESS);
+
+        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(request, httpRequest);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        assertNotNull(response.getBody());
+        LoginAttemptResponse body = (LoginAttemptResponse) response.getBody();
+        assertEquals("alice", body.getUsername());
+        assertEquals("10.1.2.3", body.getIpAddress());
+        assertEquals(LoginStatus.SUCCESS, body.getStatus());
+
+        verify(loginService).recordLoginAttempt("alice", "10.1.2.3", LoginStatus.SUCCESS);
+    }
+
+    @Test
+    @DisplayName("POST /login with status SUCCESS triggers suspicious-activity detection")
+    void testPostLoginAttempt_successStatusRunsDetection() {
+        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.1.2.4");
+        when(loginRateLimiter.isAllowed("10.1.2.4")).thenReturn(true);
+
+        LocalDateTime now = LocalDateTime.of(2026, 6, 1, 12, 0, 0);
+        LoginAttempt savedAttempt = new LoginAttempt(100L, "bob", "10.1.2.4", now, LoginStatus.SUCCESS);
+        when(loginService.recordLoginAttempt("bob", "10.1.2.4", LoginStatus.SUCCESS))
+                .thenReturn(savedAttempt);
+
+        PublicLoginFailureRequest request = new PublicLoginFailureRequest();
+        request.setUsername("bob");
+        request.setStatus(LoginStatus.SUCCESS);
+
+        loginAttemptController.recordLoginAttempt(request, httpRequest);
+
+        verify(detectionService).checkSuspiciousActivity(savedAttempt);
+    }
+
+    @Test
+    @DisplayName("POST /login with status FAILURE still returns HTTP 201 after removing guard")
+    void testPostLoginAttempt_failureStatusStillWorksAfterFix() {
+        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.1.2.5");
+        when(loginRateLimiter.isAllowed("10.1.2.5")).thenReturn(true);
+
+        LocalDateTime now = LocalDateTime.of(2026, 6, 1, 12, 0, 0);
+        LoginAttempt savedAttempt = new LoginAttempt(101L, "carol", "10.1.2.5", now, LoginStatus.FAILURE);
+        when(loginService.recordLoginAttempt("carol", "10.1.2.5", LoginStatus.FAILURE))
+                .thenReturn(savedAttempt);
+        when(captchaService.isCaptchaRequired("10.1.2.5")).thenReturn(false);
+
+        PublicLoginFailureRequest request = new PublicLoginFailureRequest();
+        request.setUsername("carol");
+        request.setStatus(LoginStatus.FAILURE);
+
+        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(request, httpRequest);
+
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        LoginAttemptResponse body = (LoginAttemptResponse) response.getBody();
+        assertEquals(LoginStatus.FAILURE, body.getStatus());
+
+        verify(loginService).recordLoginAttempt("carol", "10.1.2.5", LoginStatus.FAILURE);
+        verify(detectionService).checkSuspiciousActivity(savedAttempt);
     }
 }
