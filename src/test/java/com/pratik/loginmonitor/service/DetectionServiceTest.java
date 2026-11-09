@@ -1,6 +1,9 @@
 package com.pratik.loginmonitor.service;
 
 import java.time.LocalDateTime;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
@@ -10,7 +13,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.scheduling.annotation.Scheduled;
 
+import com.pratik.loginmonitor.LoginActivityMonitorApplication;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.entity.SuspiciousActivity;
 import com.pratik.loginmonitor.enums.LoginStatus;
@@ -27,6 +32,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 @ExtendWith(MockitoExtension.class)
 class DetectionServiceTest {
@@ -37,8 +43,73 @@ class DetectionServiceTest {
     @Mock
     private SuspiciousActivityRepository suspiciousActivityRepository;
 
+    @Mock
+    private NotificationEmailService notificationEmailService;
+
     @InjectMocks
     private DetectionService detectionService;
+
+    @Test
+    @DisplayName("Scheduling is enabled and periodic detection is configured every minute")
+    void testPeriodicDetectionSchedulingConfiguration() throws Exception {
+        assertNotNull(LoginActivityMonitorApplication.class
+                .getAnnotation(EnableScheduling.class));
+        Scheduled scheduled = DetectionService.class
+                .getMethod("runPeriodicDetection")
+                .getAnnotation(Scheduled.class);
+        assertNotNull(scheduled);
+        assertEquals(60_000L, scheduled.fixedRate());
+    }
+
+    @Test
+    @DisplayName("Periodic detection scans the 10-minute window and invokes detection")
+    void testPeriodicDetection_scansRecentAttemptsAndInvokesDetection() {
+        Clock fixedClock = Clock.fixed(
+                Instant.parse("2026-11-09T12:00:00Z"),
+                ZoneOffset.UTC);
+        detectionService.setClock(fixedClock);
+
+        LocalDateTime now = LocalDateTime.ofInstant(
+                fixedClock.instant(), ZoneOffset.UTC);
+        LoginAttempt success = new LoginAttempt(
+                101L,
+                "periodic-user",
+                "192.0.2.10",
+                now.minusMinutes(2),
+                LoginStatus.SUCCESS);
+
+        when(loginAttemptRepository
+                .findByAttemptTimeAfterOrderByAttemptTimeAsc(
+                        now.minusMinutes(10)))
+                .thenReturn(List.of(success));
+        when(suspiciousActivityRepository
+                .existsByUsernameAndActivityTypeAndDetectedAtAfter(
+                        "periodic-user",
+                        SuspiciousActivityType.SUCCESS_AFTER_MULTIPLE_FAILURES,
+                        now.minusMinutes(12)))
+                .thenReturn(false);
+        when(loginAttemptRepository
+                .countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
+                        "periodic-user",
+                        LoginStatus.FAILURE,
+                        now.minusMinutes(12),
+                        now.minusMinutes(2)))
+                .thenReturn(3L);
+        when(suspiciousActivityRepository.save(any(SuspiciousActivity.class)))
+                        .thenAnswer(invocation -> invocation.getArgument(0));
+
+        detectionService.runPeriodicDetection();
+
+        ArgumentCaptor<LocalDateTime> windowCaptor =
+                ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(loginAttemptRepository)
+                .findByAttemptTimeAfterOrderByAttemptTimeAsc(
+                        windowCaptor.capture());
+        assertEquals(now.minusMinutes(10), windowCaptor.getValue());
+        verify(suspiciousActivityRepository).save(any(SuspiciousActivity.class));
+        verify(notificationEmailService).notifySuspiciousActivity(
+                any(SuspiciousActivity.class));
+    }
 
     // ==============================================================
     // Rule 1: Username-based detection tests
@@ -61,9 +132,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeBetween(
                 eq("alice"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(5L);
 
@@ -102,9 +174,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeBetween(
                 eq("bob"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(4L);
 
@@ -142,7 +215,7 @@ class DetectionServiceTest {
 
         detectionService.checkSuspiciousActivity(failedAttempt);
 
-        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeAfter(any(), any(), any());
+        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeBetween(any(), any(), any(), any());
         verify(suspiciousActivityRepository, never()).save(any());
     }
 
@@ -172,9 +245,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeBetween(
                 eq("192.168.1.100"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(5L);
 
@@ -213,9 +287,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeBetween(
                 eq("10.0.0.50"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(4L);
 
@@ -248,7 +323,7 @@ class DetectionServiceTest {
 
         detectionService.checkSuspiciousActivity(failedAttempt);
 
-        verify(loginAttemptRepository, never()).countByIpAddressAndStatusAndAttemptTimeAfter(any(), any(), any());
+        verify(loginAttemptRepository, never()).countByIpAddressAndStatusAndAttemptTimeBetween(any(), any(), any(), any());
         verify(suspiciousActivityRepository, never()).save(any());
     }
 
@@ -278,8 +353,8 @@ class DetectionServiceTest {
 
         verify(suspiciousActivityRepository, never()).existsByUsernameAndActivityTypeAndDetectedAtAfter(any(), eq(SuspiciousActivityType.MULTIPLE_FAILED_ATTEMPTS_BY_USERNAME), any());
         verify(suspiciousActivityRepository, never()).existsByIpAddressAndActivityTypeAndDetectedAtAfter(any(), eq(SuspiciousActivityType.MULTIPLE_FAILED_ATTEMPTS_BY_IP), any());
-        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeAfter(any(), any(), any());
-        verify(loginAttemptRepository, never()).countByIpAddressAndStatusAndAttemptTimeAfter(any(), any(), any());
+        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeBetween(any(), any(), any(), any());
+        verify(loginAttemptRepository, never()).countByIpAddressAndStatusAndAttemptTimeBetween(any(), any(), any(), any());
         verify(suspiciousActivityRepository, never()).save(any());
     }
 
@@ -312,15 +387,17 @@ class DetectionServiceTest {
         )).thenReturn(false);
 
         // Both failure counts reach 5
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeBetween(
                 eq("attacker"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(5L);
 
-        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByIpAddressAndStatusAndAttemptTimeBetween(
                 eq("198.51.100.25"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(5L);
 
@@ -363,9 +440,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
                 eq("victim"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(3L);
 
@@ -399,9 +477,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
                 eq("user_k"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(2L);
 
@@ -427,9 +506,10 @@ class DetectionServiceTest {
                 any(LocalDateTime.class)
         )).thenReturn(false);
 
-        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfter(
+        when(loginAttemptRepository.countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
                 eq("clean_user"),
                 eq(LoginStatus.FAILURE),
+                any(LocalDateTime.class),
                 any(LocalDateTime.class)
         )).thenReturn(0L);
 
@@ -457,7 +537,7 @@ class DetectionServiceTest {
 
         detectionService.checkSuspiciousActivity(successAttempt);
 
-        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeAfter(any(), any(), any());
+        verify(loginAttemptRepository, never()).countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(any(), any(), any(), any());
         verify(suspiciousActivityRepository, never()).save(any());
     }
 

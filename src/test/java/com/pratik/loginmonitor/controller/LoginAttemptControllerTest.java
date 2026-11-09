@@ -4,6 +4,8 @@ package com.pratik.loginmonitor.controller;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,6 +14,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.TestingAuthenticationToken;
@@ -20,16 +24,23 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import com.pratik.loginmonitor.dto.PublicLoginFailureRequest;
+import com.pratik.loginmonitor.dto.LoginAttemptResponse;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
+import jakarta.validation.Validator;
 import jakarta.servlet.http.HttpServletRequest;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
@@ -38,7 +49,26 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@SpringBootTest(properties = {
+        "spring.datasource.url=jdbc:h2:mem:logincontracttest;DB_CLOSE_DELAY=-1;MODE=MySQL",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
+        "app.captcha.hcaptcha.site-key=test-public-site-key",
+        "app.captcha.hcaptcha.required=true"
+})
 class LoginAttemptControllerTest {
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    private Validator validator;
+
+    @Autowired
+    private CaptchaController captchaController;
 
     @Mock
     private LoginService loginService;
@@ -55,16 +85,33 @@ class LoginAttemptControllerTest {
     @InjectMocks
     private LoginAttemptController loginAttemptController;
 
+    @Test
+    @DisplayName("CAPTCHA config exposes the configured public key and required flag")
+    void captchaConfigUsesApplicationConfiguration() {
+        HttpServletRequest request =
+                org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(request.getRemoteAddr()).thenReturn("192.0.2.50");
+
+        ResponseEntity<Map<String, Object>> response =
+                captchaController.getCaptchaConfig(request);
+
+        assertEquals(HttpStatus.OK, response.getStatusCode());
+        assertEquals("test-public-site-key", response.getBody().get("siteKey"));
+        assertEquals(true, response.getBody().get("required"));
+        assertEquals(2, response.getBody().size());
+    }
+
     // 1. GET login attempts
     @Test
     @DisplayName("Should return 200 OK and list of login attempts")
-    void testGetLoginAttempts_returnsList() {
+    void testGetLoginAttempts_returnsList() throws Exception {
 
+        LocalDateTime timestamp = LocalDateTime.of(2026, 1, 2, 3, 4, 5);
         LoginAttempt a1 = new LoginAttempt(
                 1L,
                 "john",
                 "192.168.1.1",
-                LocalDateTime.now(),
+                timestamp,
                 LoginStatus.SUCCESS
         );
 
@@ -84,6 +131,22 @@ class LoginAttemptControllerTest {
         assertNotNull(response.getBody());
         assertEquals(1, ((List<?>) response.getBody()).size());
 
+        LoginAttemptResponse dto =
+                ((List<LoginAttemptResponse>) response.getBody()).get(0);
+        assertEquals("john", dto.getUsername());
+        assertEquals("192.168.1.1", dto.getIpAddress());
+        assertEquals(LoginStatus.SUCCESS, dto.getStatus());
+        JsonNode json = objectMapper.readTree(
+                objectMapper.writeValueAsString(response.getBody()));
+        JsonNode item = json.get(0);
+        assertEquals(Set.of("id", "username", "ip_address", "timestamp", "status"),
+                jsonKeys(item));
+        assertEquals("1", item.get("id").toString());
+        assertEquals("\"john\"", item.get("username").toString());
+        assertEquals("\"192.168.1.1\"", item.get("ip_address").toString());
+        assertEquals("\"SUCCESS\"", item.get("status").toString());
+        assertEquals("\"2026-01-02T03:04:05\"", item.get("timestamp").toString());
+
         verify(loginService).getLoginAttempts(
                 "john", "192.168.1.1", LoginStatus.SUCCESS
         );
@@ -93,6 +156,31 @@ class LoginAttemptControllerTest {
                 captchaService,
                 clientIpAddressExtractor
         );
+    }
+
+    @Test
+    void testGetLoginAttempts_serializesNullFieldsAsNullProperties() throws Exception {
+        when(loginService.getLoginAttempts(null, null, null))
+                .thenReturn(List.of(new LoginAttempt(
+                        null, "john", null, null, null)));
+        Authentication authentication = new TestingAuthenticationToken(
+                "john", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+
+        ResponseEntity<?> response =
+                loginAttemptController.getLoginAttempts(null, null, null, authentication);
+
+        JsonNode item = objectMapper.readTree(
+                objectMapper.writeValueAsString(response.getBody())).get(0);
+        assertEquals(Set.of("id", "username", "ip_address", "timestamp", "status"),
+                jsonKeys(item));
+        assertEquals(true, item.get("id").isNull());
+        assertEquals(true, item.get("ip_address").isNull());
+        assertEquals(true, item.get("timestamp").isNull());
+        assertEquals(true, item.get("status").isNull());
+    }
+
+    private Set<String> jsonKeys(JsonNode node) {
+        return new TreeSet<>(node.propertyNames());
     }
 
     @Test
@@ -147,7 +235,8 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user1"),
+                        new PublicLoginFailureRequest(
+                                "user1", "192.0.2.10", LoginStatus.FAILURE),
                         httpRequest
                 );
 
@@ -196,12 +285,20 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user2"),
+                        new PublicLoginFailureRequest(
+                                "user2", "192.0.2.20", LoginStatus.FAILURE),
                         httpRequest
                 );
 
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
-        assertEquals(savedAttempt, response.getBody());
+        assertEquals(
+                new LoginAttemptResponse(
+                        savedAttempt.getId(),
+                        savedAttempt.getUsername(),
+                        savedAttempt.getIpAddress(),
+                        savedAttempt.getAttemptTime(),
+                        savedAttempt.getStatus()),
+                response.getBody());
 
         verify(loginService).recordLoginAttempt(
                 "user2", "10.0.0.2", LoginStatus.FAILURE
@@ -234,7 +331,8 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user2"),
+                        new PublicLoginFailureRequest(
+                                "user2", "192.0.2.20", LoginStatus.FAILURE),
                         httpRequest);
 
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
@@ -259,7 +357,7 @@ class LoginAttemptControllerTest {
                 .thenReturn(true);
 
         when(captchaService.isCaptchaRequired("10.0.0.3"))
-                .thenReturn(false, true);
+                .thenReturn(true);
 
         LoginAttempt savedAttempt = new LoginAttempt(
                 5L,
@@ -275,7 +373,8 @@ class LoginAttemptControllerTest {
 
         ResponseEntity<?> response =
                 loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user3"),
+                        new PublicLoginFailureRequest(
+                                "user3", "192.0.2.30", LoginStatus.FAILURE),
                         httpRequest
                 );
 
@@ -292,107 +391,69 @@ class LoginAttemptControllerTest {
 
     }
 
-    // 5. Block attempt when CAPTCHA permission is missing
     @Test
-    @DisplayName("Should block login without CAPTCHA verification")
-    void testPostLoginAttempt_subsequentAttemptWithoutVerificationIsBlocked() {
+    @DisplayName("Required request fields are rejected when missing")
+    void testPostLoginAttempt_missingFieldsFailValidation() {
+        PublicLoginFailureRequest request = new PublicLoginFailureRequest();
 
-        HttpServletRequest httpRequest =
-                org.mockito.Mockito.mock(HttpServletRequest.class);
+        Set<String> invalidProperties = validator.validate(request).stream()
+                .map(violation -> violation.getPropertyPath().toString())
+                .collect(java.util.stream.Collectors.toSet());
 
-        when(clientIpAddressExtractor.extract(httpRequest))
-                .thenReturn("10.0.0.4");
-
-        when(loginRateLimiter.isAllowed("10.0.0.4"))
-                .thenReturn(true);
-
-        when(captchaService.isCaptchaRequired("10.0.0.4"))
-                .thenReturn(true);
-
-        when(captchaService.consumePermission("10.0.0.4"))
-                .thenReturn(false);
-
-        ResponseEntity<?> response =
-                loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user4"),
-                        httpRequest
-                );
-
-        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
-
-        verify(loginService, never()).recordLoginAttempt(
-                any(String.class),
-                any(String.class),
-                any(LoginStatus.class)
-        );
-
+        assertTrue(invalidProperties.containsAll(
+                Set.of("username", "ipAddress", "status", "ipAddressLiteral")));
     }
 
-    // 6. Successful CAPTCHA permission allows one login attempt
     @Test
-    @DisplayName("Should consume CAPTCHA permission exactly once for failure monitoring")
-    void testPostLoginAttempt_verificationPermissionPermitsOneAttempt() {
+    @DisplayName("An unrecognized status value cannot be deserialized")
+    void testPostLoginAttempt_rejectsInvalidStatusValue() {
+        String payload = """
+                {"username":"user","ip_address":"192.0.2.1","status":"INVALID"}
+                """;
 
-        HttpServletRequest httpRequest =
-                org.mockito.Mockito.mock(HttpServletRequest.class);
+        assertThrows(JacksonException.class,
+                () -> objectMapper.readValue(payload, PublicLoginFailureRequest.class));
+    }
 
-        when(clientIpAddressExtractor.extract(httpRequest))
-                .thenReturn("10.0.0.5");
+    @Test
+    @DisplayName("Public endpoint rejects a forged SUCCESS status")
+    void testPostLoginAttempt_rejectsForgedSuccess() {
+        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.0.0.4");
 
-        when(loginRateLimiter.isAllowed("10.0.0.5"))
-                .thenReturn(true);
+        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(
+                new PublicLoginFailureRequest(
+                        "user4", "203.0.113.4", LoginStatus.SUCCESS),
+                httpRequest);
 
-        when(captchaService.isCaptchaRequired("10.0.0.5"))
-                .thenReturn(true, false, true);
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        verifyNoInteractions(loginService, loginRateLimiter, captchaService);
+    }
 
-        when(captchaService.consumePermission("10.0.0.5"))
-                .thenReturn(true, false);
-
+    @Test
+    @DisplayName("Valid failure uses the server-derived IP, not the submitted IP")
+    void testPostLoginAttempt_validFailureUsesServerIp() {
+        HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.0.0.5");
+        when(loginRateLimiter.isAllowed("10.0.0.5")).thenReturn(true);
+        when(captchaService.isCaptchaRequired("10.0.0.5")).thenReturn(false);
         LoginAttempt savedAttempt = new LoginAttempt(
-                6L,
-                "user5",
-                "10.0.0.5",
-                LocalDateTime.now(),
-                LoginStatus.FAILURE
-        );
-
+                6L, "user5", "10.0.0.5", LocalDateTime.now(), LoginStatus.FAILURE);
         when(loginService.recordLoginAttempt(
-                "user5", "10.0.0.5", LoginStatus.FAILURE
-        )).thenReturn(savedAttempt);
+                "user5", "10.0.0.5", LoginStatus.FAILURE)).thenReturn(savedAttempt);
 
-        ResponseEntity<?> firstResponse =
-                loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user5"),
-                        httpRequest
-                );
+        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(
+                new PublicLoginFailureRequest(
+                        " user5 ", "198.51.100.99", LoginStatus.FAILURE),
+                httpRequest);
 
-        ResponseEntity<?> secondResponse =
-                loginAttemptController.recordLoginAttempt(
-                        new PublicLoginFailureRequest("user5"),
-                        httpRequest
-                );
-
-        assertEquals(
-                HttpStatus.CREATED,
-                firstResponse.getStatusCode()
-        );
-
-        assertEquals(
-                HttpStatus.FORBIDDEN,
-                secondResponse.getStatusCode()
-        );
-
-        verify(captchaService, org.mockito.Mockito.times(2))
-                .consumePermission("10.0.0.5");
-
-        verify(loginService, org.mockito.Mockito.times(1))
-                .recordLoginAttempt(
-                        "user5", "10.0.0.5", LoginStatus.FAILURE
-                );
-
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(loginRateLimiter).isAllowed("10.0.0.5");
+        verify(loginService).recordLoginAttempt(
+                "user5", "10.0.0.5", LoginStatus.FAILURE);
     }
 
-    // 7. Invalid status query parameter
+    // 5. Invalid status query parameter
     @Test
     @DisplayName("Should return 400 when status parameter is invalid")
     void testHandleTypeMismatch_returnsBadRequest() {

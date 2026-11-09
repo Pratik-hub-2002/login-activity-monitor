@@ -17,10 +17,11 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 
 import com.pratik.loginmonitor.entity.SuspiciousActivity;
 import com.pratik.loginmonitor.enums.SuspiciousActivityType;
+import com.pratik.loginmonitor.dto.SuspiciousActivityResponse;
 import com.pratik.loginmonitor.service.SuspiciousActivityService;
 
 @RestController
-@RequestMapping("/api/suspicious")
+@RequestMapping
 public class SuspiciousActivityController {
 
     private final SuspiciousActivityService suspiciousActivityService;
@@ -29,14 +30,37 @@ public class SuspiciousActivityController {
         this.suspiciousActivityService = suspiciousActivityService;
     }
 
-    @GetMapping
-    public ResponseEntity<List<SuspiciousActivity>> getSuspiciousActivities(
+    @GetMapping({"/suspicious", "/api/suspicious"})
+    public ResponseEntity<List<SuspiciousActivityResponse>> getSuspiciousActivities(
             @RequestParam(required = false) String username,
-            @RequestParam(required = false) String ipAddress,
+            @RequestParam(name = "ip_address", required = false) String ipAddressSnake,
+            @RequestParam(name = "ipAddress", required = false) String ipAddressCamel,
             @RequestParam(required = false) SuspiciousActivityType activityType) {
 
-        List<SuspiciousActivity> activities = suspiciousActivityService.getSuspiciousActivities(username, ipAddress, activityType);
-        return ResponseEntity.ok(activities);
+        String ipAddress = (ipAddressSnake != null && !ipAddressSnake.isBlank())
+                ? ipAddressSnake
+                : ipAddressCamel;
+
+        List<SuspiciousActivity> activities = suspiciousActivityService
+                .getSuspiciousActivities(username, ipAddress, activityType);
+
+        List<SuspiciousActivityResponse> responses = activities.stream()
+                .map(activity -> new SuspiciousActivityResponse(
+                        activity.getId(),
+                        activity.getIpAddress(),
+                        activity.getUsername(),
+                        activity.getReason(),
+                        activity.getDetectedAt()))
+                .toList();
+
+        return ResponseEntity.ok(responses);
+    }
+
+    public ResponseEntity<List<SuspiciousActivityResponse>> getSuspiciousActivities(
+            String username,
+            String ipAddress,
+            SuspiciousActivityType activityType) {
+        return getSuspiciousActivities(username, ipAddress, null, activityType);
     }
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
@@ -52,4 +76,3 @@ public class SuspiciousActivityController {
         return ResponseEntity.badRequest().body(error);
     }
 }
-

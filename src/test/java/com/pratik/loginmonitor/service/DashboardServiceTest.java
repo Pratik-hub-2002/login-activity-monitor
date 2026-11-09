@@ -67,5 +67,23 @@ class DashboardServiceTest {
         assertEquals(0L, stats.getFailedLoginAttempts());
         assertEquals(0L, stats.getTotalSuspiciousActivities());
     }
-}
 
+    @Test
+    @DisplayName("Regular user statistics count only the authenticated user's attempts")
+    void userDashboardStatisticsAreScopedToUser() {
+        when(loginAttemptRepository.countByUsername("alice")).thenReturn(3L);
+        when(loginAttemptRepository.countByUsernameAndStatus(
+                "alice", LoginStatus.SUCCESS)).thenReturn(2L);
+        when(loginAttemptRepository.countByUsernameAndStatus(
+                "alice", LoginStatus.FAILURE)).thenReturn(1L);
+
+        DashboardResponse stats =
+                dashboardService.getDashboardStatistics("alice", false);
+
+        assertEquals(3L, stats.getTotalLoginAttempts());
+        assertEquals(2L, stats.getSuccessfulLoginAttempts());
+        assertEquals(1L, stats.getFailedLoginAttempts());
+        assertEquals(0L, stats.getTotalSuspiciousActivities());
+        verify(loginAttemptRepository).countByUsername("alice");
+    }
+}

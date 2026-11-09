@@ -1,11 +1,15 @@
 package com.pratik.loginmonitor.controller;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,10 +22,13 @@ import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
+import com.pratik.loginmonitor.dto.OtpVerificationRequest;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.entity.LoginSession;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.LoginService;
+import com.pratik.loginmonitor.service.NotificationRecipients;
+import com.pratik.loginmonitor.service.OneTimePasswordService;
 import com.pratik.loginmonitor.service.SessionService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -38,23 +45,49 @@ class AuthControllerTest {
     @Mock
     private ClientIpAddressExtractor clientIpAddressExtractor;
 
+    @Mock
+    private OneTimePasswordService oneTimePasswordService;
+
+    @Mock
+    private NotificationRecipients notificationRecipients;
+
     @InjectMocks
     private AuthController authController;
 
     @Test
-    void verifiedBasicAuthenticationCreatesSession() {
-        HttpServletRequest request =
-                org.mockito.Mockito.mock(HttpServletRequest.class);
-        Authentication authentication =
-                new TestingAuthenticationToken("alice", null);
+    void validCredentialsSendOtpWithoutCreatingSessionOrSuccessRecord() {
+        HttpServletRequest request = org.mockito.Mockito.mock(HttpServletRequest.class);
+        Authentication authentication = authentication();
         when(clientIpAddressExtractor.extract(request)).thenReturn("192.168.1.10");
+        when(notificationRecipients.userEmail("alice"))
+                .thenReturn("alice@example.test");
+
+        ResponseEntity<?> response = authController.login(authentication, request);
+
+        assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+        Map<?, ?> body = (Map<?, ?>) response.getBody();
+        assertTrue((Boolean) body.get("otpRequired"));
+        assertFalse(body.containsKey("otp"));
+        verify(oneTimePasswordService).sendOtp(
+                "alice", "192.168.1.10", "alice@example.test");
+        verify(loginService, never()).recordLoginAttempt(
+                "alice", "192.168.1.10", LoginStatus.SUCCESS);
+        verify(sessionService, never()).createSession("alice", "192.168.1.10");
+    }
+
+    @Test
+    void validOtpRecordsSuccessAndCreatesSession() {
+        HttpServletRequest request = org.mockito.Mockito.mock(HttpServletRequest.class);
+        Authentication authentication = authentication();
+        when(clientIpAddressExtractor.extract(request)).thenReturn("192.168.1.10");
+        when(oneTimePasswordService.verifyOtp(
+                "alice", "192.168.1.10", "123456")).thenReturn(true);
 
         LoginAttempt attempt = new LoginAttempt(
                 1L, "alice", "192.168.1.10",
                 LocalDateTime.now(), LoginStatus.SUCCESS);
         when(loginService.recordLoginAttempt(
-                "alice", "192.168.1.10", LoginStatus.SUCCESS))
-                .thenReturn(attempt);
+                "alice", "192.168.1.10", LoginStatus.SUCCESS)).thenReturn(attempt);
 
         LoginSession session = new LoginSession();
         session.setSessionId("secure-session-id");
@@ -66,22 +99,35 @@ class AuthControllerTest {
         when(sessionService.createSession("alice", "192.168.1.10"))
                 .thenReturn(session);
 
-        ResponseEntity<?> response =
-                authController.login(authentication, request);
+        ResponseEntity<?> response = authController.verifyOtp(
+                authentication, new OtpVerificationRequest("123456"), request);
 
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
-        verify(loginService, org.mockito.Mockito.times(1)).recordLoginAttempt(
+        assertEquals("USER", ((Map<?, ?>) response.getBody()).get("role"));
+        verify(loginService).recordLoginAttempt(
                 "alice", "192.168.1.10", LoginStatus.SUCCESS);
-        verify(sessionService, org.mockito.Mockito.times(1))
-                .createSession("alice", "192.168.1.10");
+        verify(sessionService).createSession("alice", "192.168.1.10");
+    }
+
+    @Test
+    void invalidOtpDoesNotRecordSuccessOrCreateSession() {
+        HttpServletRequest request = org.mockito.Mockito.mock(HttpServletRequest.class);
+        when(clientIpAddressExtractor.extract(request)).thenReturn("192.168.1.10");
+        when(oneTimePasswordService.verifyOtp(
+                "alice", "192.168.1.10", "000000")).thenReturn(false);
+
+        ResponseEntity<?> response = authController.verifyOtp(
+                authentication(), new OtpVerificationRequest("000000"), request);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
+        verify(loginService, never()).recordLoginAttempt(
+                "alice", "192.168.1.10", LoginStatus.SUCCESS);
+        verify(sessionService, never()).createSession("alice", "192.168.1.10");
     }
 
     @Test
     void logoutInvalidatesTheCurrentSession() {
-        Authentication authentication =
-                new TestingAuthenticationToken(
-                        "alice", null,
-                        List.of(new SimpleGrantedAuthority("ROLE_USER")));
+        Authentication authentication = authentication();
         when(sessionService.logout("alice-session")).thenReturn(true);
 
         ResponseEntity<?> response =
@@ -93,10 +139,7 @@ class AuthControllerTest {
 
     @Test
     void logoutReturnsUnauthorizedForMissingOrInactiveSession() {
-        Authentication authentication =
-                new TestingAuthenticationToken(
-                        "alice", null,
-                        List.of(new SimpleGrantedAuthority("ROLE_USER")));
+        Authentication authentication = authentication();
         when(sessionService.logout("missing-session")).thenReturn(false);
 
         ResponseEntity<?> response =
@@ -104,5 +147,24 @@ class AuthControllerTest {
 
         assertEquals(HttpStatus.UNAUTHORIZED, response.getStatusCode());
         verify(sessionService).logout("missing-session");
+    }
+
+    @Test
+    void otpDeliveryFailureReturns503ServiceUnavailable() {
+        OneTimePasswordService.OtpDeliveryException deliveryException =
+                new OneTimePasswordService.OtpDeliveryException("Unable to deliver the login verification code.");
+
+        ResponseEntity<Map<String, String>> response =
+                authController.otpDeliveryFailed(deliveryException);
+
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
+        assertEquals("Unable to deliver the login verification code.", response.getBody().get("message"));
+    }
+
+    private Authentication authentication() {
+        return new TestingAuthenticationToken(
+                "alice",
+                null,
+                List.of(new SimpleGrantedAuthority("ROLE_USER")));
     }
 }

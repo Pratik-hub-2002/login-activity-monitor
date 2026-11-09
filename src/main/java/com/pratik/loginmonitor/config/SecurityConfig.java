@@ -22,21 +22,36 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             AuthenticationEntryPoint authenticationEntryPoint,
-            SessionAuthenticationFilter sessionAuthenticationFilter) throws Exception {
+            SessionAuthenticationFilter sessionAuthenticationFilter,
+            HcaptchaAuthenticationFilter hcaptchaAuthenticationFilter,
+            LoginAuthenticationRateLimitFilter loginAuthenticationRateLimitFilter)
+            throws Exception {
         http
-            .csrf(csrf -> csrf.ignoringRequestMatchers("/api/**"))
+            .csrf(csrf -> csrf.ignoringRequestMatchers("/api/**", "/login"))
             .exceptionHandling(exception -> exception
                     .authenticationEntryPoint(authenticationEntryPoint))
             .addFilterBefore(
                     sessionAuthenticationFilter,
                     BasicAuthenticationFilter.class)
+            .addFilterBefore(
+                    hcaptchaAuthenticationFilter,
+                    BasicAuthenticationFilter.class)
+            .addFilterBefore(
+                    loginAuthenticationRateLimitFilter,
+                    HcaptchaAuthenticationFilter.class)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/sessions/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/login-attempts").authenticated()
+                .requestMatchers(HttpMethod.GET, "/login").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/suspicious/**")
                     .hasAnyRole("ADMIN", "SUPERADMIN")
-                .requestMatchers(HttpMethod.POST, "/api/auth/login").authenticated()
+                .requestMatchers(HttpMethod.GET, "/suspicious")
+                    .hasAnyRole("ADMIN", "SUPERADMIN")
+                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/auth/otp/verify").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/login-attempts").permitAll()
+                .requestMatchers(HttpMethod.POST, "/login").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/login").permitAll()
                 .requestMatchers("/api/captcha/**").permitAll()
                 .requestMatchers("/api/dashboard/**").authenticated()
                 .requestMatchers("/api/**").authenticated()

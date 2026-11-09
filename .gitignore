@@ -1,4 +1,7 @@
 HELP.md
+.env
+.env.*
+!.env.example
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
@@ -31,3 +34,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+# Accidental root-level npm artifacts
+/node_modules/
+/package.json
+/package-lock.json

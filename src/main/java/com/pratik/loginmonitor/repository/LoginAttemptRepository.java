@@ -12,6 +12,9 @@ import com.pratik.loginmonitor.enums.LoginStatus;
 @Repository
 public interface LoginAttemptRepository
         extends JpaRepository<LoginAttempt, Long>, JpaSpecificationExecutor<LoginAttempt> {
+    java.util.List<LoginAttempt> findByAttemptTimeAfterOrderByAttemptTimeAsc(
+            LocalDateTime after
+    );
 
     /**
      * Counts login attempts for a specific username and status after a given timestamp.
@@ -20,6 +23,20 @@ public interface LoginAttemptRepository
             String username,
             LoginStatus status,
             LocalDateTime after
+    );
+
+    long countByUsernameAndStatusAndAttemptTimeBetween(
+            String username,
+            LoginStatus status,
+            LocalDateTime from,
+            LocalDateTime to
+    );
+
+    long countByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
+            String username,
+            LoginStatus status,
+            LocalDateTime after,
+            LocalDateTime before
     );
 
     /**
@@ -31,8 +48,19 @@ public interface LoginAttemptRepository
             LocalDateTime after
     );
 
+    long countByIpAddressAndStatusAndAttemptTimeBetween(
+            String ipAddress,
+            LoginStatus status,
+            LocalDateTime from,
+            LocalDateTime to
+    );
+
     /**
      * Counts all login attempts matching the given status.
      */
     long countByStatus(LoginStatus status);
+
+    long countByUsername(String username);
+
+    long countByUsernameAndStatus(String username, LoginStatus status);
 }
