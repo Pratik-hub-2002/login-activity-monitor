@@ -23,6 +23,7 @@ import com.pratik.loginmonitor.dto.LoginAttemptResponse;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
+import com.pratik.loginmonitor.service.DetectionService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
@@ -37,17 +38,20 @@ public class LoginAttemptController {
     private final LoginRateLimiter loginRateLimiter;
     private final CaptchaService captchaService;
     private final ClientIpAddressExtractor clientIpAddressExtractor;
+    private final DetectionService detectionService;
 
     public LoginAttemptController(
             LoginService loginService,
             LoginRateLimiter loginRateLimiter,
             CaptchaService captchaService,
-            ClientIpAddressExtractor clientIpAddressExtractor) {
+            ClientIpAddressExtractor clientIpAddressExtractor,
+            DetectionService detectionService) {
 
         this.loginService = loginService;
         this.loginRateLimiter = loginRateLimiter;
         this.captchaService = captchaService;
         this.clientIpAddressExtractor = clientIpAddressExtractor;
+        this.detectionService = detectionService;
     }
 
     @PostMapping({"/login", "/api/login", "/api/login-attempts"})
@@ -57,12 +61,6 @@ public class LoginAttemptController {
 
         // 1. Extract client IP address
         String clientIp = clientIpAddressExtractor.extract(httpRequest);
-
-        if (request.getStatus() != LoginStatus.FAILURE) {
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(Map.of("message", "Public login recording only accepts FAILURE status"));
-        }
 
         // 2. Check rate limiting
         if (!loginRateLimiter.isAllowed(clientIp)) {
@@ -75,9 +73,12 @@ public class LoginAttemptController {
         LoginAttempt savedAttempt = loginService.recordLoginAttempt(
                 request.getUsername(),
                 clientIp,
-                LoginStatus.FAILURE
+                request.getStatus()
         );
         LoginAttemptResponse responseAttempt = toResponse(savedAttempt);
+
+        // 4. Run suspicious-activity detection (handles both SUCCESS and FAILURE branches).
+        detectionService.checkSuspiciousActivity(savedAttempt);
 
         // Check whether the next login submission will require CAPTCHA.
         if (savedAttempt.getStatus() == LoginStatus.FAILURE
