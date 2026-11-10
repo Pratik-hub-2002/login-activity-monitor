@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 
 import com.warrenstrange.googleauth.GoogleAuthenticator;
 import com.warrenstrange.googleauth.GoogleAuthenticatorKey;
+import com.pratik.loginmonitor.entity.User;
+import com.pratik.loginmonitor.repository.UserRepository;
 
 @Service
 public class OneTimePasswordService {
@@ -24,6 +26,7 @@ public class OneTimePasswordService {
 
     private final GoogleAuthenticator authenticator;
     private final NotificationEmailService emailService;
+    private final UserRepository userRepository;
     private final Clock clock;
     private final Duration validity;
     private final ConcurrentHashMap<String, PendingOtp> pendingOtps =
@@ -32,6 +35,7 @@ public class OneTimePasswordService {
     public OneTimePasswordService(
             GoogleAuthenticator authenticator,
             NotificationEmailService emailService,
+            UserRepository userRepository,
             Clock clock,
             @Value("${app.auth.otp.validity-seconds:90}") long validitySeconds) {
         if (validitySeconds <= 0) {
@@ -39,13 +43,19 @@ public class OneTimePasswordService {
         }
         this.authenticator = authenticator;
         this.emailService = emailService;
+        this.userRepository = userRepository;
         this.clock = clock;
         this.validity = Duration.ofSeconds(validitySeconds);
     }
 
-    public void sendOtp(String username, String ipAddress, String emailAddress) {
-        if (emailAddress == null || emailAddress.isBlank()) {
-            throw new OtpDeliveryException("No email recipient is configured for this user.");
+    public void sendOtp(String username, String ipAddress) {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new OtpDeliveryException(
+                        "Unable to resolve an email recipient for this user."));
+        String emailAddress = user.getEmailAddress();
+        if (!NotificationRecipients.isValidEmailAddress(emailAddress)) {
+            throw new OtpDeliveryException(
+                    "No valid email recipient is configured for this user.");
         }
 
         GoogleAuthenticatorKey credentials = authenticator.createCredentials();

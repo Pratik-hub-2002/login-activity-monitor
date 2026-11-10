@@ -19,7 +19,6 @@ import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.entity.LoginSession;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.LoginService;
-import com.pratik.loginmonitor.service.NotificationRecipients;
 import com.pratik.loginmonitor.service.OneTimePasswordService;
 import com.pratik.loginmonitor.service.OneTimePasswordService.OtpDeliveryException;
 import com.pratik.loginmonitor.service.SessionService;
@@ -36,19 +35,16 @@ public class AuthController {
     private final SessionService sessionService;
     private final ClientIpAddressExtractor clientIpAddressExtractor;
     private final OneTimePasswordService oneTimePasswordService;
-    private final NotificationRecipients notificationRecipients;
 
     public AuthController(
             LoginService loginService,
             SessionService sessionService,
             ClientIpAddressExtractor clientIpAddressExtractor,
-            OneTimePasswordService oneTimePasswordService,
-            NotificationRecipients notificationRecipients) {
+            OneTimePasswordService oneTimePasswordService) {
         this.loginService = loginService;
         this.sessionService = sessionService;
         this.clientIpAddressExtractor = clientIpAddressExtractor;
         this.oneTimePasswordService = oneTimePasswordService;
-        this.notificationRecipients = notificationRecipients;
     }
 
     @PostMapping("/login")
@@ -58,8 +54,7 @@ public class AuthController {
 
         String username = authentication.getName();
         String clientIp = clientIpAddressExtractor.extract(request);
-        oneTimePasswordService.sendOtp(
-                username, clientIp, notificationRecipients.userEmail(username));
+        oneTimePasswordService.sendOtp(username, clientIp);
         return ResponseEntity.accepted().body(Map.of(
                 "otpRequired", true,
                 "message", "A verification code has been sent to your configured email address."));
