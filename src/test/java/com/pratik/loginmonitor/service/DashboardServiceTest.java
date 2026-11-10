@@ -76,6 +76,7 @@ class DashboardServiceTest {
                 "alice", LoginStatus.SUCCESS)).thenReturn(2L);
         when(loginAttemptRepository.countByUsernameAndStatus(
                 "alice", LoginStatus.FAILURE)).thenReturn(1L);
+        when(suspiciousActivityRepository.countByUsername("alice")).thenReturn(0L);
 
         DashboardResponse stats =
                 dashboardService.getDashboardStatistics("alice", false);

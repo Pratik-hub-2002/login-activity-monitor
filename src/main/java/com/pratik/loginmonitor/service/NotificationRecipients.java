@@ -1,5 +1,8 @@
 package com.pratik.loginmonitor.service;
 
+import jakarta.mail.internet.AddressException;
+import jakarta.mail.internet.InternetAddress;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -41,12 +44,25 @@ public class NotificationRecipients {
             }
             String username = mapping.substring(0, separator).trim();
             String email = mapping.substring(separator + 1).trim();
-            if (username.isEmpty() || email.isEmpty()) {
+            if (username.isEmpty() || !isValidEmailAddress(email)) {
                 throw new IllegalArgumentException(
-                        "APP_NOTIFICATION_USER_EMAILS must contain username=email entries");
+                        "APP_NOTIFICATION_USER_EMAILS must contain username=valid-email entries");
             }
             emails.put(username, email);
         }
         return Map.copyOf(emails);
+    }
+
+    static boolean isValidEmailAddress(String email) {
+        if (email == null || email.isBlank() || email.length() > 254) {
+            return false;
+        }
+        try {
+            InternetAddress address = new InternetAddress(email, true);
+            address.validate();
+            return email.equals(address.getAddress());
+        } catch (AddressException exception) {
+            return false;
+        }
     }
 }

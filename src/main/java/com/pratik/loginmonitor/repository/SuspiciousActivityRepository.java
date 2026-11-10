@@ -18,6 +18,8 @@ public interface SuspiciousActivityRepository
      * Checks if a suspicious activity of a specific type has already been recorded
      * for a username after a given timestamp (used for duplicate alert suppression).
      */
+
+    long countByUsername(String username);
     boolean existsByUsernameAndActivityTypeAndDetectedAtAfter(
             String username,
             SuspiciousActivityType activityType,
@@ -33,4 +35,10 @@ public interface SuspiciousActivityRepository
             SuspiciousActivityType activityType,
             LocalDateTime after
     );
+
+    /**
+     * Checks if a suspicious activity with the given detection fingerprint
+     * already exists (used for idempotent duplicate suppression).
+     */
+    boolean existsByDetectionFingerprint(String detectionFingerprint);
 }

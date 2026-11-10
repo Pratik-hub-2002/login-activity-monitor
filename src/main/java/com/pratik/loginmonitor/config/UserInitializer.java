@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 import com.pratik.loginmonitor.entity.User;
 import com.pratik.loginmonitor.enums.UserRole;
 import com.pratik.loginmonitor.repository.UserRepository;
+import com.pratik.loginmonitor.service.NotificationRecipients;
 
 @Component
 public class UserInitializer implements CommandLineRunner {
@@ -18,12 +19,15 @@ public class UserInitializer implements CommandLineRunner {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
+    private final NotificationRecipients notificationRecipients;
 
     public UserInitializer(
             UserRepository userRepository,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder,
+            NotificationRecipients notificationRecipients) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.notificationRecipients = notificationRecipients;
     }
 
     @Override
@@ -52,7 +56,16 @@ public class UserInitializer implements CommandLineRunner {
             return;
         }
 
-        if (userRepository.findByUsername(username).isPresent()) {
+        String emailAddress = notificationRecipients.userEmail(username);
+        User existingUser = userRepository.findByUsername(username).orElse(null);
+        if (existingUser != null) {
+            if (emailAddress != null
+                    && !emailAddress.equals(existingUser.getEmailAddress())) {
+                existingUser.setEmailAddress(emailAddress);
+                userRepository.save(existingUser);
+                logger.info("{} user '{}' email configuration updated.", role, username);
+                return;
+            }
             logger.info("{} user '{}' already exists. Skipping creation.",
                     role, username);
             return;
@@ -63,6 +76,7 @@ public class UserInitializer implements CommandLineRunner {
         user.setPassword(passwordEncoder.encode(password));
         user.setRole(role);
         user.setEnabled(true);
+        user.setEmailAddress(emailAddress);
 
         userRepository.save(user);
 

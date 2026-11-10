@@ -28,7 +28,6 @@ import com.pratik.loginmonitor.dto.LoginAttemptResponse;
 import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.CaptchaService;
-import com.pratik.loginmonitor.service.DetectionService;
 import com.pratik.loginmonitor.service.LoginRateLimiter;
 import com.pratik.loginmonitor.service.LoginService;
 
@@ -82,9 +81,6 @@ class LoginAttemptControllerTest {
 
     @Mock
     private ClientIpAddressExtractor clientIpAddressExtractor;
-
-    @Mock
-    private DetectionService detectionService;
 
     @InjectMocks
     private LoginAttemptController loginAttemptController;
@@ -502,8 +498,8 @@ class LoginAttemptControllerTest {
     }
 
     @Test
-    @DisplayName("POST /login with status SUCCESS triggers suspicious-activity detection")
-    void testPostLoginAttempt_successStatusRunsDetection() {
+    @DisplayName("POST /login with status SUCCESS delegates to LoginService to record attempt and trigger detection")
+    void testPostLoginAttempt_successStatusDelegatesToLoginService() {
         HttpServletRequest httpRequest = org.mockito.Mockito.mock(HttpServletRequest.class);
         when(clientIpAddressExtractor.extract(httpRequest)).thenReturn("10.1.2.4");
         when(loginRateLimiter.isAllowed("10.1.2.4")).thenReturn(true);
@@ -517,9 +513,10 @@ class LoginAttemptControllerTest {
         request.setUsername("bob");
         request.setStatus(LoginStatus.SUCCESS);
 
-        loginAttemptController.recordLoginAttempt(request, httpRequest);
+        ResponseEntity<?> response = loginAttemptController.recordLoginAttempt(request, httpRequest);
 
-        verify(detectionService).checkSuspiciousActivity(savedAttempt);
+        assertEquals(HttpStatus.CREATED, response.getStatusCode());
+        verify(loginService).recordLoginAttempt("bob", "10.1.2.4", LoginStatus.SUCCESS);
     }
 
     @Test
@@ -546,6 +543,5 @@ class LoginAttemptControllerTest {
         assertEquals(LoginStatus.FAILURE, body.getStatus());
 
         verify(loginService).recordLoginAttempt("carol", "10.1.2.5", LoginStatus.FAILURE);
-        verify(detectionService).checkSuspiciousActivity(savedAttempt);
     }
 }

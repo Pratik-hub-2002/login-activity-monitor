@@ -63,4 +63,20 @@ public interface LoginAttemptRepository
     long countByUsername(String username);
 
     long countByUsernameAndStatus(String username, LoginStatus status);
+
+    /**
+     * Returns login attempts matching the given username, status and time range.
+     * Used by fingerprint-based detection to identify qualifying attempts.
+     */
+    java.util.List<LoginAttempt> findByUsernameAndStatusAndAttemptTimeBetween(
+            String username, LoginStatus status,
+            LocalDateTime from, LocalDateTime to);
+
+    java.util.List<LoginAttempt> findByIpAddressAndStatusAndAttemptTimeBetween(
+            String ipAddress, LoginStatus status,
+            LocalDateTime from, LocalDateTime to);
+
+    java.util.List<LoginAttempt> findByUsernameAndStatusAndAttemptTimeAfterAndAttemptTimeBefore(
+            String username, LoginStatus status,
+            LocalDateTime after, LocalDateTime before);
 }

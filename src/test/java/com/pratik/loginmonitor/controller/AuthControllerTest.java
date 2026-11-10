@@ -27,7 +27,6 @@ import com.pratik.loginmonitor.entity.LoginAttempt;
 import com.pratik.loginmonitor.entity.LoginSession;
 import com.pratik.loginmonitor.enums.LoginStatus;
 import com.pratik.loginmonitor.service.LoginService;
-import com.pratik.loginmonitor.service.NotificationRecipients;
 import com.pratik.loginmonitor.service.OneTimePasswordService;
 import com.pratik.loginmonitor.service.SessionService;
 
@@ -48,9 +47,6 @@ class AuthControllerTest {
     @Mock
     private OneTimePasswordService oneTimePasswordService;
 
-    @Mock
-    private NotificationRecipients notificationRecipients;
-
     @InjectMocks
     private AuthController authController;
 
@@ -59,8 +55,6 @@ class AuthControllerTest {
         HttpServletRequest request = org.mockito.Mockito.mock(HttpServletRequest.class);
         Authentication authentication = authentication();
         when(clientIpAddressExtractor.extract(request)).thenReturn("192.168.1.10");
-        when(notificationRecipients.userEmail("alice"))
-                .thenReturn("alice@example.test");
 
         ResponseEntity<?> response = authController.login(authentication, request);
 
@@ -69,7 +63,7 @@ class AuthControllerTest {
         assertTrue((Boolean) body.get("otpRequired"));
         assertFalse(body.containsKey("otp"));
         verify(oneTimePasswordService).sendOtp(
-                "alice", "192.168.1.10", "alice@example.test");
+                "alice", "192.168.1.10");
         verify(loginService, never()).recordLoginAttempt(
                 "alice", "192.168.1.10", LoginStatus.SUCCESS);
         verify(sessionService, never()).createSession("alice", "192.168.1.10");
