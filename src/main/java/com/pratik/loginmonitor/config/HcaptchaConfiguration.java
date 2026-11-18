@@ -2,6 +2,7 @@ package com.pratik.loginmonitor.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
@@ -9,6 +10,6 @@ public class HcaptchaConfiguration {
 
     @Bean
     public RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+        return RestClient.builder().requestFactory(new SimpleClientHttpRequestFactory());
     }
 }

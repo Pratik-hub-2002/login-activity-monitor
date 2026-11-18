@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.mail.SimpleMailMessage;
@@ -49,6 +50,7 @@ import com.pratik.loginmonitor.service.SessionService;
         "app.captcha.hcaptcha.required=false",
         "app.notification.user-emails=alice=alice@example.test"
 })
+@Import(SecurityAuthorizationIntegrationTest.TestMailConfiguration.class)
 class SecurityAuthorizationIntegrationTest {
 
     private static final String CLIENT_IP = "127.0.0.1";
@@ -237,6 +239,7 @@ class SecurityAuthorizationIntegrationTest {
         user.setPassword(passwordEncoder.encode("test-password"));
         user.setRole(role);
         user.setEnabled(true);
+        user.setEmailAddress(username + "@example.test");
         return user;
     }
 

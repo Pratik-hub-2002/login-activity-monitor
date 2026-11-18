@@ -53,7 +53,8 @@ public class OneTimePasswordService {
                 .orElseThrow(() -> new OtpDeliveryException(
                         "Unable to resolve an email recipient for this user."));
         String emailAddress = user.getEmailAddress();
-        if (!NotificationRecipients.isValidEmailAddress(emailAddress)) {
+        if (emailAddress == null || emailAddress.isBlank()
+                || !NotificationRecipients.isValidEmailAddress(emailAddress)) {
             throw new OtpDeliveryException(
                     "No valid email recipient is configured for this user.");
         }

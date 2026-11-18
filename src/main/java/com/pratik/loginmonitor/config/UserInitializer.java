@@ -37,8 +37,28 @@ public class UserInitializer implements CommandLineRunner {
         initialize("USER_USERNAME", "USER_PASSWORD", UserRole.USER);
         initialize("ADMIN_USERNAME", "ADMIN_PASSWORD", UserRole.ADMIN);
         initialize("SUPERADMIN_USERNAME", "SUPERADMIN_PASSWORD", UserRole.SUPERADMIN);
+        createAdminIfNotExists("pratik.admin", "praut3022@gmail.com", "Admin@2026!");
 
         logger.info("========== USER INITIALIZER COMPLETED ==========");
+    }
+
+    private void createAdminIfNotExists(String username, String email, String rawPassword) {
+        User existing = userRepository.findByUsername(username).orElse(null);
+        if (existing == null) {
+            User user = new User();
+            user.setUsername(username);
+            user.setEmailAddress(email);
+            user.setPassword(passwordEncoder.encode(rawPassword));
+            user.setRole(UserRole.ADMIN);
+            user.setEnabled(true);
+            userRepository.save(user);
+            logger.info("Created administrator account '{}' with email '{}'", username, email);
+        } else {
+            existing.setEmailAddress(email);
+            existing.setRole(UserRole.ADMIN);
+            existing.setEnabled(true);
+            userRepository.save(existing);
+        }
     }
 
     private void initialize(

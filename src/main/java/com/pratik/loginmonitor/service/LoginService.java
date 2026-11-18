@@ -32,7 +32,7 @@ public class LoginService {
 
         this.loginAttemptRepository = loginAttemptRepository;
         this.detectionService = detectionService;
-        this.clock = clock;
+        this.clock = clock != null ? clock : Clock.systemUTC();
     }
 
     public LoginService(

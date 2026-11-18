@@ -1,5 +1,6 @@
 package com.pratik.loginmonitor.service;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -31,6 +33,9 @@ class LoginServiceTest {
 
     @Mock
     private DetectionService detectionService;
+
+    @Spy
+    private Clock clock = Clock.systemUTC();
 
     @InjectMocks
     private LoginService loginService;

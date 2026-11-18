@@ -8,6 +8,13 @@ import jakarta.servlet.http.HttpServletRequest;
 public class ClientIpAddressExtractor {
 
     public String extract(HttpServletRequest request) {
-        return request.getRemoteAddr();
+        if (request == null) {
+            return "";
+        }
+        String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
+            return xForwardedFor.split(",")[0].trim();
+        }
+        return request.getRemoteAddr() != null ? request.getRemoteAddr() : "";
     }
 }

@@ -2,6 +2,7 @@ package com.pratik.loginmonitor.service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.MailException;
 import org.springframework.mail.MailSendException;
@@ -21,14 +22,19 @@ public class NotificationEmailService {
     private final JavaMailSender mailSender;
     private final NotificationRecipients recipients;
     private final String fromAddress;
+    private final boolean devMode;
 
+    @Autowired
     public NotificationEmailService(
             JavaMailSender mailSender,
             NotificationRecipients recipients,
             @Value("${app.notification.from:${spring.mail.username:no-reply@localhost}}")
-            String fromAddress) {
+            String fromAddress,
+            @Value("${app.mail.dev-mode:false}")
+            boolean devMode) {
         this.mailSender = mailSender;
         this.recipients = recipients;
+        this.devMode = devMode;
         if ((fromAddress == null || fromAddress.isBlank() || fromAddress.contains("localhost"))
                 && mailSender instanceof JavaMailSenderImpl impl
                 && impl.getUsername() != null && !impl.getUsername().isBlank()) {
@@ -38,13 +44,27 @@ public class NotificationEmailService {
         }
     }
 
+    public NotificationEmailService(
+            JavaMailSender mailSender,
+            NotificationRecipients recipients,
+            String fromAddress) {
+        this(mailSender, recipients, fromAddress, false);
+    }
+
     public void sendOneTimePassword(String username, String recipient, String otp) {
         if (recipient == null || recipient.isBlank()) {
             throw new IllegalArgumentException("Recipient email must not be null or blank");
         }
         if (mailSender instanceof JavaMailSenderImpl impl
-                && (impl.getHost() == null || impl.getHost().isBlank())) {
-            throw new MailSendException("SMTP host is not configured.");
+                && (impl.getHost() == null || impl.getHost().isBlank()
+                || impl.getPassword() == null || impl.getPassword().isBlank())) {
+            if (devMode) {
+                LOGGER.info("=======================================================");
+                LOGGER.info("[LOCAL DEV 2FA] Verification code for user '{}': {}", username, otp);
+                LOGGER.info("=======================================================");
+                return;
+            }
+            throw new MailSendException("SMTP host or password is not configured.");
         }
         SimpleMailMessage message = new SimpleMailMessage();
         message.setFrom(fromAddress);
@@ -52,7 +72,18 @@ public class NotificationEmailService {
         message.setSubject("Login verification code");
         message.setText("Your one-time login verification code is " + otp
                 + ". It expires shortly. If you did not initiate this login, ignore this message.");
-        mailSender.send(message);
+        try {
+            mailSender.send(message);
+        } catch (MailException exception) {
+            if (devMode) {
+                LOGGER.warn("Mail delivery failed ({}); fallback to dev 2FA logging.", exception.getMessage());
+                LOGGER.info("=======================================================");
+                LOGGER.info("[LOCAL DEV 2FA] Verification code for user '{}': {}", username, otp);
+                LOGGER.info("=======================================================");
+                return;
+            }
+            throw exception;
+        }
     }
 
     public void notifySuspiciousActivity(SuspiciousActivity activity) {
